@@ -4,6 +4,8 @@ from operations.filter import FilterOperation
 from operations.sort import SortOperation
 from operations.calculations import CalculationOperation
 from operations.export_manager import ExportManager
+from operations.duplicates import DuplicateOperation
+from operations.columns import ColumnOperation
 
 
 APP_NAME = "Spreadsheet Data Tool"
@@ -750,6 +752,291 @@ def export_menu(dataset):
 
 
 
+# ================ 0.4.0 ================
+
+def select_columns(dataset):
+    print("\nAvailable columns:")
+
+    for index, column in enumerate(dataset.columns, start=1):
+        print(f"{index}. {column}")
+
+    raw = input(
+        "\nEnter column numbers separated by commas: "
+    ).strip()
+
+    try:
+        indexes = [int(item.strip()) for item in raw.split(",")]
+    except ValueError:
+        print("Please enter valid column numbers.")
+        return None
+
+    if not indexes:
+        print("No columns selected.")
+        return None
+
+    if any(index < 1 or index > len(dataset.columns) for index in indexes):
+        print("One or more column numbers are invalid.")
+        return None
+
+    selected = [dataset.columns[index - 1] for index in indexes]
+
+    # Remove repeated selections but preserve the chosen order.
+    return list(dict.fromkeys(selected))
+
+
+def duplicate_menu(dataset):
+    print("\n--- Duplicate Operations ---")
+    print("1. Find all rows that have duplicates")
+    print("2. Find duplicate occurrences after the first")
+    print("3. Remove duplicates and keep the first")
+    print("4. Remove duplicates and keep the last")
+    print("5. Keep the row with the highest value")
+    print("6. Keep the row with the lowest value")
+    print("0. Cancel")
+
+    choice = input("\nChoose an option: ").strip()
+
+    if choice == "0":
+        return None
+
+    if choice not in {"1", "2", "3", "4", "5", "6"}:
+        print("Invalid option.")
+        return None
+
+    print(
+        "\nChoose columns used to identify duplicates."
+        "\nFor the entire row, enter all column numbers."
+    )
+    columns = select_columns(dataset)
+
+    if not columns:
+        return None
+
+    if choice == "1":
+        result = DuplicateOperation.find_duplicates(
+            dataset, columns, keep="all"
+        )
+    elif choice == "2":
+        result = DuplicateOperation.find_duplicates(
+            dataset, columns, keep="first"
+        )
+    elif choice == "3":
+        result = DuplicateOperation.remove_duplicates(
+            dataset, columns, keep="first"
+        )
+    elif choice == "4":
+        result = DuplicateOperation.remove_duplicates(
+            dataset, columns, keep="last"
+        )
+    else:
+        print("\nSelect the column used to determine the highest/lowest value.")
+        priority_column = select_column(dataset)
+
+        if priority_column is None or priority_column in columns:
+            print("Choose a priority column not used to identify duplicates.")
+            return None
+
+        result = DuplicateOperation.keep_highest_or_lowest(
+            dataset,
+            duplicate_columns=columns,
+            priority_column=priority_column,
+            highest=(choice == "5"),
+        )
+
+    print(f"\nRows before operation: {len(dataset.dataframe)}")
+    print(f"Rows after operation:  {len(result.dataframe)}")
+    print(result.preview(10).to_string(index=False))
+
+    use_result = input(
+        "\nUse this result as the current dataset? (y/n): "
+    ).strip().lower()
+
+    return result if use_result == "y" else None
+
+
+def column_menu(dataset):
+    print("\n--- Column Operations ---")
+    print("1. Rename a column")
+    print("2. Copy a column")
+    print("3. Delete columns")
+    print("4. Move selected columns to the beginning")
+    print("5. Trim spaces from text")
+    print("6. Replace values")
+    print("7. Add serial numbers")
+    print("8. Compare two columns")
+    print("9. Subtract one column from another")
+    print("0. Cancel")
+
+    choice = input("\nChoose an option: ").strip()
+
+    if choice == "0":
+        return None
+
+    if choice == "1":
+        old_name = select_column(dataset)
+        if old_name is None:
+            return None
+
+        new_name = input("Enter the new column name: ")
+        result = ColumnOperation.rename_column(
+            dataset, old_name, new_name
+        )
+
+    elif choice == "2":
+        source = select_column(dataset)
+        if source is None:
+            return None
+
+        new_name = input("Enter the name for the copied column: ")
+        result = ColumnOperation.copy_column(
+            dataset, source, new_name
+        )
+
+    elif choice == "3":
+        columns = select_columns(dataset)
+        if not columns:
+            return None
+
+        confirm = input(
+            f"Delete these columns {columns}? (y/n): "
+        ).strip().lower()
+
+        if confirm != "y":
+            return None
+
+        result = ColumnOperation.delete_columns(dataset, columns)
+
+    elif choice == "4":
+        columns = select_columns(dataset)
+        if not columns:
+            return None
+
+        result = ColumnOperation.move_columns_first(dataset, columns)
+
+    elif choice == "5":
+        print("1. Trim all text columns")
+        print("2. Select specific columns")
+        trim_choice = input("Choose an option: ").strip()
+
+        if trim_choice == "1":
+            result = ColumnOperation.trim_text(dataset)
+        elif trim_choice == "2":
+            columns = select_columns(dataset)
+            if not columns:
+                return None
+            result = ColumnOperation.trim_text(dataset, columns)
+        else:
+            print("Invalid option.")
+            return None
+
+    elif choice == "6":
+        column = select_column(dataset)
+        if column is None:
+            return None
+
+        old_value = input("Value to find: ")
+        new_value = input("Replace it with: ")
+
+        partial = input(
+            "Replace part of text rather than the entire cell? (y/n): "
+        ).strip().lower() == "y"
+
+        case_sensitive = input(
+            "Case-sensitive replacement? (y/n): "
+        ).strip().lower() == "y"
+
+        result = ColumnOperation.replace_values(
+            dataset,
+            column,
+            old_value,
+            new_value,
+            partial=partial,
+            case_sensitive=case_sensitive,
+        )
+
+    elif choice == "7":
+        name = input(
+            "Serial column name (press Enter for Serial): "
+        ).strip() or "Serial"
+
+        raw_start = input(
+            "Starting number (press Enter for 1): "
+        ).strip()
+
+        try:
+            start = int(raw_start) if raw_start else 1
+        except ValueError:
+            print("Starting number must be a whole number.")
+            return None
+
+        result = ColumnOperation.add_serial_numbers(
+            dataset, column_name=name, start=start
+        )
+
+    elif choice == "8":
+        left = select_column(dataset)
+        if left is None:
+            return None
+
+        right = select_column(dataset)
+        if right is None:
+            return None
+
+        print("Operators: ==, !=, >, <, >=, <=")
+        operator = input("Enter comparison operator: ").strip()
+
+        print("1. Return matching rows")
+        print("2. Add a new column containing True/False")
+        compare_choice = input("Choose an option: ").strip()
+
+        if compare_choice == "2":
+            result_name = input("Name for the result column: ").strip()
+        elif compare_choice == "1":
+            result_name = None
+        else:
+            print("Invalid option.")
+            return None
+
+        result = ColumnOperation.compare_columns(
+            dataset,
+            left,
+            operator,
+            right,
+            result_column=result_name,
+        )
+
+    elif choice == "9":
+        left = select_column(dataset)
+        if left is None:
+            return None
+
+        right = select_column(dataset)
+        if right is None:
+            return None
+
+        result_name = input("Name for the difference column: ").strip()
+
+        result = ColumnOperation.subtract_columns(
+            dataset, left, right, result_name
+        )
+
+    else:
+        print("Invalid option.")
+        return None
+
+    print(f"\nResult: {len(result.dataframe)} rows, "
+          f"{len(result.dataframe.columns)} columns")
+    print(result.preview(10).to_string(index=False))
+
+    use_result = input(
+        "\nUse this result as the current dataset? (y/n): "
+    ).strip().lower()
+
+    return result if use_result == "y" else None
+
+
+
+
 
 def main_menu():
 
@@ -786,6 +1073,8 @@ def main_menu():
         print("9. Group summary")
         print("10. Export current results")
         print("11. Return to original dataset")
+        print("13. Duplicate operations")
+        print("14. Column operations")
         print("12. Exit")
         print()
 
@@ -953,6 +1242,32 @@ def main_menu():
         elif choice == "12":
             print("Goodbye!")
             break
+
+        elif choice == "13":
+            if dataset is None:
+                print("Please load a file first.")
+                continue
+
+            try:
+                result = duplicate_menu(dataset)
+                if result is not None:
+                    dataset = result
+                    print("Current dataset updated.")
+            except Exception as error:
+                print(f"Duplicate operation failed: {error}")
+
+        elif choice == "14":
+            if dataset is None:
+                print("Please load a file first.")
+                continue
+
+            try:
+                result = column_menu(dataset)
+                if result is not None:
+                    dataset = result
+                    print("Current dataset updated.")
+            except Exception as error:
+                print(f"Column operation failed: {error}")
 
         else:
 
