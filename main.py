@@ -6,6 +6,12 @@ from operations.calculations import CalculationOperation
 from operations.export_manager import ExportManager
 from operations.duplicates import DuplicateOperation
 from operations.columns import ColumnOperation
+from operations.land_area import LandAreaOperation
+from operations.reports import ReportOperation
+from operations.text_cleaning import TextCleaningOperation
+from operations.validation import ValidationOperation
+from operations.safe_correction import SafeCorrectionOperation
+from core.history_manager import HistoryManager
 
 
 APP_NAME = "Spreadsheet Data Tool"
@@ -1036,12 +1042,683 @@ def column_menu(dataset):
 
 
 
+# ================ part 5 ============================
+
+def get_sqft_standard():
+    print("\nSquare feet per Marla:")
+    print("1. 272 square feet (default)")
+    print("2. 225 square feet")
+
+    choice = input("Choose standard (press Enter for 272): ").strip()
+
+    if choice in {"", "1"}:
+        return 272
+    if choice == "2":
+        return 225
+
+    raise ValueError("Choose 1 or 2.")
+
+
+def land_area_menu(dataset):
+    print("\n--- Land Area Operations ---")
+    print("1. Convert K-M-F to square feet")
+    print("2. Convert square feet to K-M-F")
+    print("3. Add multiple land areas")
+    print("4. Subtract one land area from another")
+    print("5. Calculate an ownership share")
+    print("6. Add area conversion columns to the dataset")
+    print("7. Calculate share areas in the dataset")
+    print("0. Cancel")
+
+    choice = input("\nChoose an option: ").strip()
+
+    if choice == "0":
+        return None
+
+    if choice not in {"1", "2", "3", "4", "5", "6", "7"}:
+        print("Invalid option.")
+        return None
+
+    sqft_standard = get_sqft_standard()
+
+    if choice == "1":
+        area = input("Enter area in K-M-F (example 10-10-0): ")
+        result = LandAreaOperation.to_square_feet(
+            area, sqft_standard
+        )
+        print(f"\nTotal square feet: {result}")
+        return None
+
+    if choice == "2":
+        total = input("Enter total square feet: ")
+        result = LandAreaOperation.from_square_feet(
+            total, sqft_standard
+        )
+        print(f"\nArea in K-M-F: {result}")
+        return None
+
+    if choice == "3":
+        raw_areas = input(
+            "Enter areas separated by commas (example 1-0-0,0-10-0): "
+        )
+        areas = [area.strip() for area in raw_areas.split(",")]
+
+        result = LandAreaOperation.add_areas(
+            areas, sqft_standard
+        )
+        print(f"\nCombined area: {result}")
+        return None
+
+    if choice == "4":
+        area1 = input("Enter the original area in K-M-F: ")
+        area2 = input("Enter the area to subtract in K-M-F: ")
+
+        result = LandAreaOperation.subtract_areas(
+            area1, area2, sqft_standard
+        )
+        print(f"\nRemaining area: {result}")
+        return None
+
+    if choice == "5":
+        area = input("Enter total area in K-M-F: ")
+        share = input("Enter ownership share (example 2/5): ")
+
+        result = LandAreaOperation.calculate_share(
+            area, share, sqft_standard
+        )
+        print(f"\nShare area: {result}")
+        return None
+
+    if choice == "6":
+        source_column = select_column(dataset)
+        if source_column is None:
+            return None
+
+        sqft_column = input(
+            "Name for square-feet column (default Area_SqFt): "
+        ).strip() or "Area_SqFt"
+
+        kmf_column = input(
+            "Name for normalized K-M-F column (default Area_KMF): "
+        ).strip() or "Area_KMF"
+
+        result = LandAreaOperation.add_area_columns(
+            dataset,
+            source_column=source_column,
+            sqft_column=sqft_column,
+            normalized_column=kmf_column,
+            sqft_per_marla=sqft_standard,
+        )
+
+    else:
+        print("\nSelect the column containing total area in K-M-F.")
+        area_column = select_column(dataset)
+        if area_column is None:
+            return None
+
+        print("\nSelect the column containing shares, such as 2/5 or 1/3.")
+        share_column = select_column(dataset)
+        if share_column is None:
+            return None
+
+        result_column = input(
+            "Name for calculated share area (default Share_Area_KMF): "
+        ).strip() or "Share_Area_KMF"
+
+        result = LandAreaOperation.add_share_columns(
+            dataset,
+            area_column=area_column,
+            share_column=share_column,
+            result_column=result_column,
+            sqft_per_marla=sqft_standard,
+        )
+
+    print(f"\nRows: {len(result.dataframe)}")
+    print(result.preview(10).to_string(index=False))
+
+    use_result = input(
+        "\nUse this result as the current dataset? (y/n): "
+    ).strip().lower()
+
+    return result if use_result == "y" else None
+
+
+# ============== part 6 ==================
+
+
+def report_menu(dataset):
+    print("\n--- Reports and Subtotals ---")
+    print("1. Grouped summary")
+    print("2. Overall dataset summary")
+    print("0. Cancel")
+
+    choice = input("\nChoose an option: ").strip()
+
+    if choice == "0":
+        return None
+
+    if choice == "2":
+        result = ReportOperation.overall_summary(dataset)
+
+    elif choice == "1":
+        print("\nSelect the column(s) used to group records.")
+        group_columns = select_columns(dataset)
+
+        if not group_columns:
+            return None
+
+        aggregations = {}
+
+        while True:
+            add_more = input(
+                "\nAdd a calculation for a column? (y/n): "
+            ).strip().lower()
+
+            if add_more != "y":
+                break
+
+            column = select_column(dataset)
+            if column is None:
+                continue
+
+            print("\nAvailable calculations:")
+            print("1. Sum (numeric columns)")
+            print("2. Average (numeric columns)")
+            print("3. Minimum")
+            print("4. Maximum")
+            print("5. Count non-empty values")
+            print("6. Count unique values")
+            print("7. Median (numeric columns)")
+
+            operation_map = {
+                "1": "sum",
+                "2": "mean",
+                "3": "min",
+                "4": "max",
+                "5": "count",
+                "6": "nunique",
+                "7": "median",
+            }
+
+            operation_choice = input(
+                "Choose calculation: "
+            ).strip()
+
+            operation = operation_map.get(operation_choice)
+
+            if operation is None:
+                print("Invalid calculation.")
+                continue
+
+            aggregations.setdefault(column, []).append(operation)
+
+        result = ReportOperation.group_summary(
+            dataset,
+            group_columns=group_columns,
+            aggregations=aggregations,
+            include_record_count=True,
+        )
+
+    else:
+        print("Invalid option.")
+        return None
+
+    print("\n--- Report Preview ---")
+    print(f"Report rows: {len(result.dataframe)}")
+    print(result.preview(20).to_string(index=False))
+
+    export_now = input(
+        "\nExport this report now? (y/n): "
+    ).strip().lower()
+
+    if export_now == "y":
+        format_choice = input(
+            "Format: xlsx, ods, csv, or tsv (default xlsx): "
+        ).strip().lower() or "xlsx"
+
+        prefix = input(
+            "Report filename prefix (press Enter for default): "
+        ).strip() or "property_report"
+
+        try:
+            path = ExportManager.export(
+                result,
+                output_format=format_choice,
+                output_directory="output",
+                filename_prefix=prefix,
+            )
+            print(f"\nReport exported to: {path}")
+        except Exception as error:
+            print(f"Report export failed: {error}")
+
+    use_result = input(
+        "\nMake this report the current dataset? (y/n): "
+    ).strip().lower()
+
+    return result if use_result == "y" else None
+
+
+# ============== part 7 ================
+
+def text_cleaning_menu(dataset):
+    print("\n--- Text Cleaning and Column Transformations ---")
+    print("1. Find and replace across selected columns")
+    print("2. Split one column into two")
+    print("3. Combine multiple columns")
+    print("4. Normalize spaces")
+    print("5. Change text capitalization")
+    print("0. Cancel")
+
+    choice = input("\nChoose an option: ").strip()
+
+    if choice == "0":
+        return None
+
+    if choice == "1":
+        columns = select_columns(dataset)
+        if not columns:
+            return None
+
+        find_text = input("Text to find: ")
+        replace_text = input("Replace with: ")
+
+        partial = input(
+            "Replace matching text inside cells? (y/n): "
+        ).strip().lower() == "y"
+
+        case_sensitive = input(
+            "Case-sensitive matching? (y/n): "
+        ).strip().lower() == "y"
+
+        result = TextCleaningOperation.find_replace(
+            dataset,
+            columns=columns,
+            find_text=find_text,
+            replace_text=replace_text,
+            partial=partial,
+            case_sensitive=case_sensitive,
+        )
+
+    elif choice == "2":
+        source_column = select_column(dataset)
+        if source_column is None:
+            return None
+
+        separator = input(
+            "Separator (press Enter for a space): "
+        )
+        if separator == "":
+            separator = " "
+
+        first_column = input("Name for first output column: ").strip()
+        second_column = input("Name for second output column: ").strip()
+
+        result = TextCleaningOperation.split_column(
+            dataset,
+            source_column=source_column,
+            separator=separator,
+            first_column=first_column,
+            second_column=second_column,
+        )
+
+    elif choice == "3":
+        columns = select_columns(dataset)
+        if not columns or len(columns) < 2:
+            print("Select at least two columns.")
+            return None
+
+        new_column = input("Name for combined column: ").strip()
+        separator = input(
+            "Separator (press Enter for a space): "
+        )
+        if separator == "":
+            separator = " "
+
+        result = TextCleaningOperation.combine_columns(
+            dataset,
+            columns=columns,
+            new_column=new_column,
+            separator=separator,
+            skip_blank=True,
+        )
+
+    elif choice == "4":
+        print("1. Normalize all text columns")
+        print("2. Select columns")
+        clean_choice = input("Choose an option: ").strip()
+
+        if clean_choice == "1":
+            result = TextCleaningOperation.normalize_spaces(dataset)
+        elif clean_choice == "2":
+            columns = select_columns(dataset)
+            if not columns:
+                return None
+
+            result = TextCleaningOperation.normalize_spaces(
+                dataset, columns=columns
+            )
+        else:
+            print("Invalid option.")
+            return None
+
+    elif choice == "5":
+        columns = select_columns(dataset)
+        if not columns:
+            return None
+
+        print("1. UPPERCASE")
+        print("2. lowercase")
+        print("3. Title Case")
+
+        case_choice = input("Choose capitalization style: ").strip()
+
+        case_map = {
+            "1": "upper",
+            "2": "lower",
+            "3": "title",
+        }
+
+        case_style = case_map.get(case_choice)
+
+        if case_style is None:
+            print("Invalid option.")
+            return None
+
+        result = TextCleaningOperation.change_case(
+            dataset,
+            columns=columns,
+            case_style=case_style,
+        )
+
+    else:
+        print("Invalid option.")
+        return None
+
+    print("\n--- Result Preview ---")
+    print(result.preview(10).to_string(index=False))
+
+    use_result = input(
+        "\nUse this result as the current dataset? (y/n): "
+    ).strip().lower()
+
+    return result if use_result == "y" else None
+
+
+# ============== part 8 ================
+
+def validation_menu(dataset):
+    """Menu for spreadsheet validation and data-quality checks."""
+
+    while True:
+        print("\n--- Data Validation and Quality Checks ---")
+        print("1. Check required fields for blanks")
+        print("2. Find duplicate values or combinations")
+        print("3. Validate CNIC format")
+        print("4. Validate K-M-F land area")
+        print("5. Validate numeric columns")
+        print("0. Return to main menu")
+
+        choice = input("Choose an option: ").strip()
+
+        if choice == "0":
+            return None
+
+        try:
+            if choice == "1":
+                columns = select_columns(dataset)
+
+                if not columns:
+                    continue
+
+                report = ValidationOperation.check_blank_fields(
+                    dataset, columns
+                )
+
+            elif choice == "2":
+                print(
+                    "Select one column for duplicates such as CNIC, "
+                    "or multiple columns for duplicate combinations."
+                )
+                columns = select_columns(dataset)
+
+                if not columns:
+                    continue
+
+                report = ValidationOperation.check_duplicates(
+                    dataset, columns
+                )
+
+            elif choice == "3":
+                column = select_column(dataset)
+
+                if not column:
+                    continue
+
+                report = ValidationOperation.validate_cnic(
+                    dataset, column
+                )
+
+            elif choice == "4":
+                column = select_column(dataset)
+
+                if not column:
+                    continue
+
+                print("Choose the square-foot standard:")
+                print("1. 272 square feet per marla")
+                print("2. 225 square feet per marla")
+
+                standard_choice = input("Choose 1 or 2: ").strip()
+
+                if standard_choice == "1":
+                    sqft_per_marla = 272
+                elif standard_choice == "2":
+                    sqft_per_marla = 225
+                else:
+                    print("Invalid standard.")
+                    continue
+
+                report = ValidationOperation.validate_kmf_area(
+                    dataset, column, sqft_per_marla
+                )
+
+            elif choice == "5":
+                columns = select_columns(dataset)
+
+                if not columns:
+                    continue
+
+                allow_negative_input = input(
+                    "Allow negative values? (y/n): "
+                ).strip().lower()
+
+                if allow_negative_input not in ("y", "n"):
+                    print("Please enter y or n.")
+                    continue
+
+                report = ValidationOperation.validate_numeric(
+                    dataset,
+                    columns,
+                    allow_negative=(allow_negative_input == "y")
+                )
+
+            else:
+                print("Invalid option. Please try again.")
+                continue
+
+            print("\n--- Validation Report ---")
+
+            if report.row_count == 0:
+                print("No issues found by this check.")
+            else:
+                print(f"Issues found: {report.row_count}")
+                print(report.dataframe.to_string(index=False))
+
+            export_choice = input(
+                "\nExport this report? (y/n): "
+            ).strip().lower()
+
+            if export_choice == "y":
+                from operations.export_manager import ExportManager
+
+                ExportManager.export(
+                    report,
+                    output_format="xlsx",
+                    filename_prefix="validation_report"
+                )
+                print("Export request completed.")
+
+            use_report = input(
+                "Make this report the current dataset? (y/n): "
+            ).strip().lower()
+
+            if use_report == "y":
+                return report
+
+        except (ValueError, TypeError, KeyError) as error:
+            print(f"Could not complete validation: {error}")
+
+
+
+# ============== part 9 ================
+
+def safe_correction_menu(dataset):
+    """Preview corrections, ask for approval, and optionally export."""
+
+    from operations.export_manager import ExportManager
+
+    while True:
+        print("\n--- Safe Correction and Change Tracking ---")
+        print("1. Find and replace text")
+        print("2. Trim and normalize spaces")
+        print("0. Return to main menu")
+
+        choice = input("Choose an option: ").strip()
+
+        if choice == "0":
+            return None
+
+        try:
+            if choice == "1":
+                columns = select_columns(dataset)
+
+                if not columns:
+                    continue
+
+                find_text = input("Text to find: ")
+                replace_text = input("Replace it with: ")
+
+                print("\nMatch type:")
+                print("1. Contains the text")
+                print("2. Exact cell match")
+
+                mode_choice = input("Choose 1 or 2: ").strip()
+
+                if mode_choice == "1":
+                    mode = "contains"
+                elif mode_choice == "2":
+                    mode = "exact"
+                else:
+                    print("Invalid match type.")
+                    continue
+
+                case_choice = input(
+                    "Case-sensitive matching? (y/n): "
+                ).strip().lower()
+
+                if case_choice not in ("y", "n"):
+                    print("Please enter y or n.")
+                    continue
+
+                proposed, change_log = (
+                    SafeCorrectionOperation.preview_replace(
+                        dataset,
+                        columns,
+                        find_text,
+                        replace_text,
+                        mode=mode,
+                        case_sensitive=(case_choice == "y")
+                    )
+                )
+
+            elif choice == "2":
+                columns = select_columns(dataset)
+
+                if not columns:
+                    continue
+
+                proposed, change_log = (
+                    SafeCorrectionOperation.preview_trim_spaces(
+                        dataset, columns
+                    )
+                )
+
+            else:
+                print("Invalid option. Please try again.")
+                continue
+
+            print("\n--- Proposed Changes ---")
+
+            if change_log.row_count == 0:
+                print("No changes are required.")
+                continue
+
+            print(f"Cells that would change: {change_log.row_count}")
+            print(change_log.dataframe.to_string(index=False))
+
+            preview_choice = input(
+                "\nShow the proposed corrected data? (y/n): "
+            ).strip().lower()
+
+            if preview_choice == "y":
+                print("\n--- Corrected Data Preview ---")
+                print(proposed.preview(10).to_string(index=False))
+
+            confirm = input(
+                "\nApply these changes to the current session? (y/n): "
+            ).strip().lower()
+
+            if confirm != "y":
+                print("Changes were not applied.")
+                continue
+
+            print("Changes approved for the current session.")
+
+            export_corrected = input(
+                "Export corrected data to a new Excel file? (y/n): "
+            ).strip().lower()
+
+            if export_corrected == "y":
+                ExportManager.export(
+                    proposed,
+                    output_format="xlsx",
+                    filename_prefix="corrected_data"
+                )
+
+            export_log = input(
+                "Export the change log to a new Excel file? (y/n): "
+            ).strip().lower()
+
+            if export_log == "y":
+                ExportManager.export(
+                    change_log,
+                    output_format="xlsx",
+                    filename_prefix="change_log"
+                )
+
+            return proposed
+
+        except (ValueError, TypeError, KeyError) as error:
+            print(f"Could not prepare corrections: {error}")
+
+
 
 
 def main_menu():
 
     original_dataset = None
     dataset = None
+    history = HistoryManager()
 
     while True:
 
@@ -1076,6 +1753,13 @@ def main_menu():
         print("13. Duplicate operations")
         print("14. Column operations")
         print("12. Exit")
+        print("16. Reports and subtotals")
+        print("17. Text cleaning and column transformations")
+        print("18. Data validation and quality checks")
+        print("19. Safe correction and change tracking")
+        print("20. View operation history")
+        print("21. Undo last change")
+        print("22. Redo undone change")
         print()
 
         choice = input(
@@ -1087,7 +1771,10 @@ def main_menu():
 
             try:
                 original_dataset = load_dataset()
-                dataset = original_dataset.copy()
+                # dataset = original_dataset.copy()
+                if original_dataset is not None:
+                    dataset = original_dataset.copy()
+                    history.reset(dataset)
 
             except Exception as error:
                 print(f"\nFailed to load file: {error}")
@@ -1268,6 +1955,82 @@ def main_menu():
                     print("Current dataset updated.")
             except Exception as error:
                 print(f"Column operation failed: {error}")
+
+        elif choice == "16":
+            if dataset is None:
+                print("Please load a file first.")
+                continue
+
+            try:
+                result = report_menu(dataset)
+
+                if result is not None:
+                    dataset = result
+                    print("Current dataset updated to the report.")
+
+            except Exception as error:
+                print(f"Report generation failed: {error}")
+
+        
+        elif choice == "17":
+            if dataset is None:
+                print("Please load a file first.")
+                continue
+
+            try:
+                result = text_cleaning_menu(dataset)
+
+                if result is not None:
+                    dataset = result
+                    print("Current dataset updated.")
+
+            except Exception as error:
+                print(f"Text-cleaning operation failed: {error}")
+
+        elif choice == "18":
+            result = validation_menu(dataset)
+
+            if result is not None:
+                history.record(result, "Validation report")
+                dataset = result
+
+        elif choice == "19":
+            result = safe_correction_menu(dataset)
+
+            if result is not None:
+                history.record(result, "Safe correction")
+                dataset = result
+
+        
+        elif choice == "20":
+            history_table = history.get_history()
+
+            if history_table.empty:
+                print("No operation history is available.")
+            else:
+                print("\n--- Operation History ---")
+                print(history_table.to_string(index=False))
+
+        elif choice == "21":
+            restored_dataset = history.undo()
+
+            if restored_dataset is None:
+                print("Nothing to undo.")
+            else:
+                dataset = restored_dataset
+                print("Undo successful. Previous dataset state restored.")
+                print_dataset_info(dataset)
+
+        elif choice == "22":
+            restored_dataset = history.redo()
+
+            if restored_dataset is None:
+                print("Nothing to redo.")
+            else:
+                dataset = restored_dataset
+                print("Redo successful. Dataset state restored.")
+                print_dataset_info(dataset)
+
 
         else:
 
